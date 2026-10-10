@@ -4,3 +4,6 @@ df.pkl
 indices.pkl
 tfidf_matrix.pkl
 tfidf.pkl
+__pycache__
+
+

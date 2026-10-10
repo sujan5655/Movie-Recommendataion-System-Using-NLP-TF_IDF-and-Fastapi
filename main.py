@@ -130,6 +130,35 @@ async def tmdb_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return r.json()
 
 
+
+
+
+async def tmdb_recommendations(
+    tmdb_id: int,
+    limit: int = 12
+) -> List[TMDBMovieCard]:
+    """Fetch movies recommended by TMDB for a selected movie."""
+
+    data = await tmdb_get(
+        f"/movie/{tmdb_id}/recommendations",
+        {
+            "language": "en-US",
+            "page": 1,
+        },
+    )
+
+    cards = await tmdb_cards_from_results(
+        data.get("results", []),
+        limit=limit,
+    )
+
+    return [
+        movie for movie in cards
+        if movie.tmdb_id != tmdb_id
+    ]
+
+
+
 async def tmdb_cards_from_results(
     results: List[dict], limit: int = 20
 ) -> List[TMDBMovieCard]:
@@ -367,33 +396,31 @@ async def movie_details_route(tmdb_id: int):
 
 
 # ---------- GENRE RECOMMENDATIONS ----------
+
 @app.get("/recommend/genre", response_model=List[TMDBMovieCard])
 async def recommend_genre(
     tmdb_id: int = Query(...),
     limit: int = Query(18, ge=1, le=50),
 ):
-    """
-    Given a TMDB movie ID:
-    - fetch details
-    - pick first genre
-    - discover movies in that genre (popular)
-    """
-    details = await tmdb_movie_details(tmdb_id)
-    if not details.genres:
-        return []
-
-    genre_id = details.genres[0]["id"]
-    discover = await tmdb_get(
-        "/discover/movie",
+    # Get recommendations related to the selected movie
+    data = await tmdb_get(
+        f"/movie/{tmdb_id}/recommendations",
         {
-            "with_genres": genre_id,
             "language": "en-US",
-            "sort_by": "popularity.desc",
             "page": 1,
         },
     )
-    cards = await tmdb_cards_from_results(discover.get("results", []), limit=limit)
-    return [c for c in cards if c.tmdb_id != tmdb_id]
+
+    cards = await tmdb_cards_from_results(
+        data.get("results", []),
+        limit=limit + 1,
+    )
+
+    # Exclude the movie the user selected
+    return [
+        movie for movie in cards
+        if movie.tmdb_id != tmdb_id
+    ][:limit]
 
 
 # ---------- TF-IDF ONLY (debug/useful) ----------
@@ -451,22 +478,46 @@ async def search_bundle(
         tfidf_items.append(TFIDFRecItem(title=title, score=score, tmdb=card))
 
     # 2) Genre recommendations (TMDB discover by first genre)
+    
+    # 2) Movie-specific recommendations from TMDB
+    
+    # 2) Movie-specific recommendations from TMDB
     genre_recs: List[TMDBMovieCard] = []
-    if details.genres:
-        genre_id = details.genres[0]["id"]
+
+    try:
+        genre_recs = await tmdb_recommendations(
+            tmdb_id=details.tmdb_id,
+            limit=genre_limit,
+        )
+    except HTTPException:
+        genre_recs = []
+
+    # Fallback: discover movies from all the selected movie's genres
+    if not genre_recs and details.genres:
+        genre_ids = "|".join(
+            str(genre["id"]) for genre in details.genres
+        )
+
         discover = await tmdb_get(
             "/discover/movie",
             {
-                "with_genres": genre_id,
+                "with_genres": genre_ids,
                 "language": "en-US",
                 "sort_by": "popularity.desc",
                 "page": 1,
             },
         )
+
         cards = await tmdb_cards_from_results(
-            discover.get("results", []), limit=genre_limit
+            discover.get("results", []),
+            limit=genre_limit + 1,
         )
-        genre_recs = [c for c in cards if c.tmdb_id != details.tmdb_id]
+
+        genre_recs = [
+            movie for movie in cards
+            if movie.tmdb_id != details.tmdb_id
+        ][:genre_limit]
+        
 
     return SearchBundleResponse(
         query=query,
