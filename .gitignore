@@ -1,9 +1,7 @@
-df.pkl
+
 .env
 .venv
-indices.pkl
-tfidf_matrix.pkl
-tfidf.pkl
+
 __pycache__
 
 
